@@ -20,6 +20,8 @@
 //! DES =  Data Extension Segments
 //! NPPBH = Number of Pixels Per Block Horizontal
 //! NPPBV = Number of Pixels Per Block Vertical
+//! LISHn = Length of nth Image Subheader
+//! LIn = Length of nth Image Segment
 //!
 //! ------------------------------------------------------------------------------
 //! References:
@@ -29,9 +31,12 @@
 extern crate nom;
 extern crate memmap;
 
+use std::borrow::{Borrow, Cow};
 use std::str;
+use std::str::FromStr;
 use std::fs::File;
-use nom::{IResult, be_u8, be_u32};
+use std::num::ParseIntError;
+use nom::{IResult, be_u8, be_u32, digit};
 use memmap::{Mmap, MmapOptions};
 
 const FHDR_SIZE: usize = 4;
@@ -61,10 +66,17 @@ const FSCOP_SIZE: usize = 5;
 const FSCPYS_SIZE: usize = 5;
 const ENCRYP_SIZE: usize = 1;
 const FBKGC_SIZE: usize = 3;
+const ONAME_SIZE: usize = 24;
+const OPHONE_SIZE: usize = 18;
+const FL_SIZE: usize = 12;
+const HL_SIZE: usize = 6;
+const NUMI_SIZE: usize = 3;
+const LISH_SIZE: usize = 6;
+const LI_SIZE: usize = 10;
 
 
 #[derive(Debug)]
-pub struct RGB (u8, u8, u8);
+pub struct RGB(u8, u8, u8);
 
 #[derive(Debug)]
 pub struct NitfHeader<'a> {
@@ -95,6 +107,13 @@ pub struct NitfHeader<'a> {
   fscpys: &'a [u8],
   encryp: &'a [u8],
   fbkgc: RGB,
+  oname: &'a [u8],
+  ophone: &'a [u8],
+  fl: &'a [u8],
+  hl: &'a [u8],
+  numi: &'a [u8],
+  lish: Vec<&'a[u8]>,
+  li: Vec<&'a[u8]>,
 }
 
 
@@ -105,6 +124,36 @@ named!(
     |rgb: &[u8]| RGB(rgb[0], rgb[1], rgb[2])
   )
 );
+
+named!(num_from_str <&str, Result<i8,ParseIntError>>,
+    map!(digit, FromStr::from_str)
+);
+
+fn parse_lish_and_li<'a>(input: &[u8], numi: &[u8]) -> IResult<&'a[u8], &'a[u8]> {
+  let numi_str = String::from_utf8_lossy(numi).borrow();
+  let mut num_lish: usize = match num_from_str(numi_str) {
+    IResult::Done(_, Ok(num)) => num as usize,
+    _ => panic!("unable to parse numi")
+  };
+
+  let mut lish_vec: Vec<&[u8]> = Vec::new();
+  let mut li_vec: Vec<&[u8]> = Vec::new();
+
+  for x in 1..num_lish {
+
+    // Need to work on this part below, right now won't compile!
+    map!(
+    take!(LISH_SIZE),
+    |bytes| lish_vec.push(bytes)
+    );
+    map!(
+      take!(LI_SIZE),
+      |bytes| li_vec.push(bytes)
+    );
+  }
+
+  (lish_vec, li_vec)
+}
 
 
 pub fn header(input: &[u8]) -> IResult<&[u8], NitfHeader> {
@@ -136,6 +185,11 @@ pub fn header(input: &[u8]) -> IResult<&[u8], NitfHeader> {
   fscpys: take!(FSCPYS_SIZE) >>
   encryp: take!(ENCRYP_SIZE) >>
   fbkgc: parse_fbkgc >>
+  oname: take!(ONAME_SIZE) >>
+  ophone: take!(OPHONE_SIZE) >>
+  fl: take!(FL_SIZE) >>
+  hl: take!(HL_SIZE) >>
+  numi: take!(NUMI_SIZE) >>
   (
     NitfHeader {
       fhdr: fhdr,
@@ -165,8 +219,19 @@ pub fn header(input: &[u8]) -> IResult<&[u8], NitfHeader> {
       fscpys: fscpys,
       encryp: encryp,
       fbkgc: fbkgc,
+      oname: oname,
+      ophone: ophone,
+      fl: fl,
+      hl: hl,
+      numi: numi,
   })
   )
+}
+
+#[test]
+fn test_numi_from_str() {
+  let numi = num_from_str("003".as_bytes());
+  println!("num: {:?}", numi);
 }
 
 #[test]
@@ -176,16 +241,10 @@ fn test_version() {
 
   let (_, nitf_hdr) = header(&mmap).unwrap();
 
-  let rgb = nitf_hdr.fbkgc;
-  println!("{:#?}", rgb);
-
-
-
-
-  let nitf_string = str::from_utf8(nitf_hdr.fhdr).unwrap();
-  assert_eq!("NITF", nitf_string);
+  assert_eq!("NITF", str::from_utf8(nitf_hdr.fhdr).unwrap());
   assert_eq!("02.10", str::from_utf8(nitf_hdr.fver).unwrap());
   assert_eq!("03", str::from_utf8(nitf_hdr.clevel).unwrap());
   assert_eq!("BF01", str::from_utf8(nitf_hdr.stype).unwrap());
-
+  assert_eq!("JITC Fort Huachuca, AZ  ", str::from_utf8(nitf_hdr.oname).unwrap());
+  assert_eq!("001", str::from_utf8(nitf_hdr.numi).unwrap());
 }
